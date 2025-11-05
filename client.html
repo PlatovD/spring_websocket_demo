@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>WebSocket Chat</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+
+        .panel {
+            border: 1px solid #ccc;
+            padding: 15px;
+            border-radius: 5px;
+            flex: 1;
+        }
+
+        #messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+        }
+
+        .success {
+            background-color: #e8f5e8;
+        }
+
+        .error {
+            background-color: #ffe8e8;
+            color: red;
+        }
+
+        .system {
+            background-color: #e8f0ff;
+        }
+
+        input, button {
+            padding: 8px;
+            margin: 5px 0;
+        }
+
+        button {
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 3px;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+<h1>WebSocket Chat</h1>
+
+<div class="container">
+    <div class="panel">
+        <h3>Управление</h3>
+        <button onclick="connect()">Подключиться</button>
+        <button onclick="disconnect()">Отключиться</button>
+        <div>Статус: <span id="status">Не подключен</span></div>
+    </div>
+
+    <div class="panel">
+        <h3>Подписки</h3>
+        <input id="topicInput" type="text" placeholder="Название темы">
+        <button onclick="subscribe()">Подписаться</button>
+        <button onclick="unsubscribe()">Отписаться</button>
+        <div id="subscriptions">Подписки: нет</div>
+    </div>
+
+    <div class="panel">
+        <h3>Отправка сообщений</h3>
+        <input id="messageInput" type="text" placeholder="Сообщение">
+        <input id="targetTopic" type="text" placeholder="Тема">
+        <button onclick="sendChatMessage()">Отправить в тему</button>
+    </div>
+</div>
+
+<div class="panel">
+    <h3>Сообщения</h3>
+    <div id="messages"></div>
+</div>
+
+<script>
+    let socket = null;
+    let currentSubscriptions = new Set();
+
+    function connect() {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            addMessage("Уже подключен", "system");
+            return;
+        }
+
+        socket = new WebSocket("ws://localhost:8080/chat");
+
+        socket.onopen = () => {
+            document.getElementById("status").textContent = "Подключен";
+            document.getElementById("status").style.color = "green";
+            addMessage("✅ WebSocket подключен", "success");
+        };
+
+        socket.onclose = () => {
+            document.getElementById("status").textContent = "Отключен";
+            document.getElementById("status").style.color = "red";
+            addMessage("❌ WebSocket отключен", "error");
+            currentSubscriptions.clear();
+            updateSubscriptionsDisplay();
+        };
+
+        socket.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data);
+                displayJsonMessage(message);
+            } catch (e) {
+                addMessage(event.data, "system");
+            }
+        };
+
+        socket.onerror = (error) => {
+            addMessage("❌ Ошибка WebSocket: " + error, "error");
+        };
+    }
+
+    function disconnect() {
+        if (socket) {
+            socket.close();
+        }
+    }
+
+    function subscribe() {
+        const topic = document.getElementById("topicInput").value.trim();
+        if (!topic) {
+            addMessage("Введите название темы", "error");
+            return;
+        }
+
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            addMessage("Сначала подключитесь к WebSocket", "error");
+            return;
+        }
+
+        const message = {
+            messageType: "SUBSCRIBE",
+            topic: topic,
+            content: ""
+        };
+
+        socket.send(JSON.stringify(message));
+        currentSubscriptions.add(topic);
+        updateSubscriptionsDisplay();
+        addMessage(`Подписываюсь на тему: ${topic}`, "system");
+    }
+
+    function unsubscribe() {
+        const topic = document.getElementById("topicInput").value.trim();
+        if (!topic) {
+            addMessage("Введите название темы", "error");
+            return;
+        }
+
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            addMessage("Сначала подключитесь к WebSocket", "error");
+            return;
+        }
+
+        const message = {
+            messageType: "UNSUBSCRIBE",
+            topic: topic,
+            content: ""
+        };
+
+        socket.send(JSON.stringify(message));
+        currentSubscriptions.delete(topic);
+        updateSubscriptionsDisplay();
+        addMessage(`Отписываюсь от темы: ${topic}`, "system");
+    }
+
+    function sendChatMessage() {
+        const messageText = document.getElementById("messageInput").value.trim();
+        const topic = document.getElementById("targetTopic").value.trim();
+
+        if (!messageText) {
+            addMessage("Введите сообщение", "error");
+            return;
+        }
+
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            addMessage("Сначала подключитесь к WebSocket", "error");
+            return;
+        }
+
+        if (!topic) {
+            addMessage("Сначала выберете название темы!", "error");
+            return;
+        }
+
+        const message = {
+            messageType: "MESSAGE",
+            topic: topic,
+            content: messageText
+        };
+
+        socket.send(JSON.stringify(message));
+        document.getElementById("messageInput").value = "";
+        addMessage(`Я (${topic || 'general'}): ${messageText}`, "system");
+    }
+
+    function displayJsonMessage(message) {
+        const type = message.responseStatus?.toLowerCase() || 'system';
+        const text = message.message || JSON.stringify(message);
+        addMessage(text, type);
+    }
+
+    function addMessage(text, type = "system") {
+        const messagesDiv = document.getElementById("messages");
+        const messageElement = document.createElement("div");
+        messageElement.className = `message ${type}`;
+        messageElement.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+        messagesDiv.appendChild(messageElement);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    function updateSubscriptionsDisplay() {
+        const subsDiv = document.getElementById("subscriptions");
+        if (currentSubscriptions.size === 0) {
+            subsDiv.textContent = "Подписки: нет";
+        } else {
+            subsDiv.textContent = "Подписки: " + Array.from(currentSubscriptions).join(", ");
+        }
+    }
+
+    window.onload = connect;
+
+    document.getElementById('messageInput').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') {
+            sendChatMessage();
+        }
+    });
+
+    document.getElementById('topicInput').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') {
+            subscribe();
+        }
+    });
+</script>
+</body>
+</html>
